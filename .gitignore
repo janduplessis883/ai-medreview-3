@@ -1,0 +1,15 @@
+# Local secrets and credentials
+/secrets/
+/.streamlit/secrets.toml
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local tooling and OS files
+.DS_Store
+.pytest_cache/
+.ruff_cache/
