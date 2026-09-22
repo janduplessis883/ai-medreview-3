@@ -88,6 +88,16 @@ def build_questions() -> tuple[dict[str, Any], list[str]]:
                 "Requires prompt attention because it suggests serious harm, safety, discrimination, or unresolved risk.",
             ],
         ),
+        "safety_or_inclusion_concern": Noul(
+            instructions=(
+                "Does `review` mention a concern about patient safety, harm, "
+                "discrimination, dignity, privacy, or inclusion?"
+            ),
+            criteria={
+                "true": "The review explicitly raises such a concern.",
+                "false": "The review does not raise such a concern.",
+            },
+        ),
     }
 
     secondary_topics = [
@@ -147,6 +157,9 @@ async def analyze_one(
         "actionability_confidence": answer_value(response.scores["actionability"], "confidence"),
         "urgency": answer_value(response.scores["urgency"], "score"),
         "urgency_confidence": answer_value(response.scores["urgency"], "confidence"),
+        "safety_or_inclusion_concern": answer_value(
+            response.nouls["safety_or_inclusion_concern"], "noul"
+        ),
     }
 
 
@@ -207,6 +220,7 @@ async def analyze_dataframe(
         "jev_actionability_confidence",
         "jev_urgency",
         "jev_urgency_confidence",
+        "jev_safety_or_inclusion_concern",
     ]
     output_fields = list(dict.fromkeys(output_fields))
     for (row_index, _), result in zip(jobs, results):
@@ -226,6 +240,7 @@ async def analyze_dataframe(
                 "jev_actionability_confidence": str(result["actionability_confidence"]),
                 "jev_urgency": str(result["urgency"]),
                 "jev_urgency_confidence": str(result["urgency_confidence"]),
+                "jev_safety_or_inclusion_concern": str(result["safety_or_inclusion_concern"]),
             }
         )
 

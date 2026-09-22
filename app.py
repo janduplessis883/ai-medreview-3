@@ -20,7 +20,8 @@ LOW_CONFIDENCE = 0.60
 
 
 @st.cache_data
-def load_reviews(path: str) -> pd.DataFrame:
+def load_reviews(path: str, modified_time_ns: int) -> pd.DataFrame:
+    """Load analyzed reviews and invalidate the cache when the CSV changes."""
     df = pd.read_csv(path)
     # Normalize the original test-output schema and the new batch-output schema.
     if "time" not in df.columns and "date" in df.columns:
@@ -39,15 +40,19 @@ def load_reviews(path: str) -> pd.DataFrame:
         "jev_sentiment_strength",
         "jev_actionability",
         "jev_urgency",
+        "jev_safety_or_inclusion_concern",
     ]
     for column in numeric:
         if column in df:
             df[column] = pd.to_numeric(df[column], errors="coerce")
+    if "jev_safety_or_inclusion_concern" not in df.columns:
+        df["jev_safety_or_inclusion_concern"] = 0.0
     df["review_id"] = range(1, len(df) + 1)
     df["needs_review"] = (
         (df["jev_sentiment_confidence"] < 0.65)
         | (df["jev_primary_topic_confidence"] < LOW_CONFIDENCE)
         | (df["jev_urgency"] >= HIGH_URGENCY)
+        | (df["jev_safety_or_inclusion_concern"] >= 0.7)
         | df["jev_primary_topic"].eq("Respect, Dignity, Privacy and Inclusion")
     )
     return df
@@ -83,7 +88,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         min_actionability = st.slider(
             "Minimum actionability",
             min_value=0.0,
-            max_value=4.0,
+            max_value=3.0,
             value=0.0,
             step=0.1,
             help="Show reviews with a JEV actionability score at or above this value.",
@@ -91,10 +96,18 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         min_urgency = st.slider(
             "Minimum urgency",
             min_value=0.0,
-            max_value=4.0,
+            max_value=3.0,
             value=0.0,
             step=0.1,
             help="Show reviews with a JEV urgency score at or above this value.",
+        )
+        min_safety_concern = st.slider(
+            "Minimum safety / inclusion concern",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.05,
+            help="Show reviews with a JEV safety or inclusion concern probability at or above this value.",
         )
         date_min = df["review_date"].min().date()
         date_max = df["review_date"].max().date()
@@ -117,6 +130,7 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         filtered = filtered[filtered["jev_primary_topic"].isin(topics)]
     filtered = filtered[filtered["jev_actionability"] >= min_actionability]
     filtered = filtered[filtered["jev_urgency"] >= min_urgency]
+    filtered = filtered[filtered["jev_safety_or_inclusion_concern"] >= min_safety_concern]
     if isinstance(dates, tuple) and len(dates) == 2:
         filtered = filtered[filtered["review_date"].dt.date.between(dates[0], dates[1])]
     if review_queue:
@@ -194,9 +208,9 @@ def render_overview(df: pd.DataFrame, chart_colors: list[str]) -> None:
         hide_index=True,
         column_config={
             "pcn": st.column_config.TextColumn("PCN"),
-            "positive": st.column_config.NumberColumn("Positive", format="%.0f%%"),
-            "negative": st.column_config.NumberColumn("Negative", format="%.0f%%"),
-            "actionable": st.column_config.NumberColumn("Actionable", format="%.0f%%"),
+            "positive": st.column_config.NumberColumn("Positive", format="percent"),
+            "negative": st.column_config.NumberColumn("Negative", format="percent"),
+            "actionable": st.column_config.NumberColumn("Actionable", format="percent"),
             "review_queue": st.column_config.NumberColumn("Review queue"),
         },
     )
@@ -222,8 +236,8 @@ def render_surgery_view(df: pd.DataFrame, chart_colors: list[str]) -> None:
         column_config={
             "pcn": "PCN",
             "surgery": "Surgery",
-            "positive": st.column_config.NumberColumn("Positive", format="%.0f%%"),
-            "negative": st.column_config.NumberColumn("Negative", format="%.0f%%"),
+            "positive": st.column_config.NumberColumn("Positive", format="percent"),
+            "negative": st.column_config.NumberColumn("Negative", format="percent"),
             "avg_actionability": st.column_config.NumberColumn("Avg actionability", format="%.2f"),
         },
     )
@@ -246,16 +260,19 @@ def render_review_queue(df: pd.DataFrame) -> None:
         return
     display = queue[[
         "review_id", "review_date", "pcn", "surgery", "jev_sentiment", "jev_primary_topic",
-        "jev_primary_topic_confidence", "jev_actionability", "jev_urgency", "free_text",
+        "jev_primary_topic_confidence", "jev_actionability", "jev_urgency",
+        "jev_safety_or_inclusion_concern", "free_text",
     ]].rename(columns={
         "review_id": "ID", "review_date": "Date", "pcn": "PCN", "surgery": "Surgery",
         "jev_sentiment": "Sentiment", "jev_primary_topic": "Primary topic",
         "jev_primary_topic_confidence": "Topic confidence", "jev_actionability": "Actionability",
         "jev_urgency": "Urgency", "free_text": "Review",
+        "jev_safety_or_inclusion_concern": "Safety / inclusion concern",
     })
+    display["Topic confidence"] = display["Topic confidence"].mul(100)
     st.dataframe(display, hide_index=True, height=430, column_config={
         "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY"),
-        "Topic confidence": st.column_config.ProgressColumn("Topic confidence", min_value=0, max_value=1, format="%.0%%"),
+        "Topic confidence": st.column_config.ProgressColumn("Topic confidence", min_value=0, max_value=100, format="%.0f%%"),
         "Review": st.column_config.TextColumn("Review", width="large"),
     })
 
@@ -290,6 +307,7 @@ def render_review_explorer(df: pd.DataFrame) -> None:
                 "sentiment_strength": row["jev_sentiment_strength"],
                 "actionability_confidence": row["jev_actionability_confidence"],
                 "urgency_confidence": row["jev_urgency_confidence"],
+                "safety_or_inclusion_concern": row.get("jev_safety_or_inclusion_concern", "Not available"),
                 "secondary_topic_scores": json.loads(row["jev_secondary_topic_scores"]),
             })
             if "jev_raw_output_json" in row.index and row["jev_raw_output_json"]:
@@ -309,7 +327,7 @@ def main() -> None:
         st.error(f"Could not find an analyzed CSV at {NEW_DATA_PATH} or {SAMPLE_DATA_PATH}")
         st.stop()
     try:
-        df = load_reviews(str(data_path))
+        df = load_reviews(str(data_path), data_path.stat().st_mtime_ns)
     except ValueError as error:
         st.error(str(error))
         st.stop()
